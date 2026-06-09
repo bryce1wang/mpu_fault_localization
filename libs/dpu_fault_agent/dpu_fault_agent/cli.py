@@ -123,7 +123,11 @@ def _stream_updates(graph: Any, input_value: Any, config: dict[str, Any]) -> Non
             interrupts = event["__interrupt__"]
             print("== human_gate: interrupted ==")
             for item in interrupts:
-                print(json.dumps(getattr(item, "value", item), indent=2, ensure_ascii=False))
+                print(
+                    json.dumps(
+                        getattr(item, "value", item), indent=2, ensure_ascii=False
+                    )
+                )
             continue
         for node, update in event.items():
             print(f"== {node} ==")

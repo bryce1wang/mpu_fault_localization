@@ -1,7 +1,14 @@
 from __future__ import annotations
 
-from dpu_fault_agent.state import DpuFaultState, Hypothesis, Observation
+from typing import TYPE_CHECKING
+
 from dpu_fault_agent.tools import format_ref
+
+if TYPE_CHECKING:
+    from dpu_fault_agent.state import DpuFaultState, Hypothesis
+else:
+    DpuFaultState = dict
+    Hypothesis = dict
 
 
 def render_report(state: DpuFaultState) -> str:
@@ -33,7 +40,9 @@ def render_report(state: DpuFaultState) -> str:
     if observations:
         for obs in observations[:15]:
             ref = format_ref(obs)
-            lines.append(f"- [{obs.get('kind', 'signal')}] {obs.get('summary', '')} ({ref})")
+            lines.append(
+                f"- [{obs.get('kind', 'signal')}] {obs.get('summary', '')} ({ref})"
+            )
     else:
         lines.append("- No strong log or source-code observations were found.")
 

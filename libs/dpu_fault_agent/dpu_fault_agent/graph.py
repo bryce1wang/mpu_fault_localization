@@ -8,7 +8,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from dpu_fault_agent.report import render_report
-from dpu_fault_agent.state import Approval, DpuFaultState, Hypothesis, Observation
+from dpu_fault_agent.state import Approval, DpuFaultState, Hypothesis
 from dpu_fault_agent.tools import (
     derive_search_terms,
     format_ref,
@@ -89,7 +89,9 @@ def log_triage(state: DpuFaultState) -> dict[str, Any]:
     return {
         "observations": observations,
         "messages": [
-            AIMessage(content=f"Log triage collected {len(observations)} observation(s).")
+            AIMessage(
+                content=f"Log triage collected {len(observations)} observation(s)."
+            )
         ],
     }
 
@@ -110,7 +112,9 @@ def source_search(state: DpuFaultState) -> dict[str, Any]:
 def hypothesis_builder(state: DpuFaultState) -> dict[str, Any]:
     observations = state.get("observations", [])
     source_observations = [obs for obs in observations if obs.get("kind") == "source"]
-    log_observations = [obs for obs in observations if obs.get("kind", "").startswith("log")]
+    log_observations = [
+        obs for obs in observations if obs.get("kind", "").startswith("log")
+    ]
     hypotheses: list[Hypothesis] = []
 
     if source_observations and log_observations:
@@ -153,7 +157,9 @@ def hypothesis_builder(state: DpuFaultState) -> dict[str, Any]:
                 "id": "H1",
                 "title": "No strong evidence was found in the provided logs",
                 "confidence": 0.2,
-                "evidence": ["No error-like log lines or source-code matches were found."],
+                "evidence": [
+                    "No error-like log lines or source-code matches were found."
+                ],
                 "source_refs": [],
                 "validation_steps": [
                     "Confirm the provided log captures the failure window.",
@@ -167,7 +173,9 @@ def hypothesis_builder(state: DpuFaultState) -> dict[str, Any]:
         "hypotheses": hypotheses,
         "approval": {"status": "pending", "approved_ids": [], "rejected_ids": []},
         "messages": [
-            AIMessage(content=f"Built {len(hypotheses)} candidate hypothesis/hypotheses.")
+            AIMessage(
+                content=f"Built {len(hypotheses)} candidate hypothesis/hypotheses."
+            )
         ],
     }
 

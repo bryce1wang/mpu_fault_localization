@@ -3,12 +3,12 @@ from __future__ import annotations
 import re
 from collections import Counter
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from dpu_fault_agent.state import Observation
 else:
-    Observation = dict[str, Any]
+    Observation = dict
 
 ERROR_RE = re.compile(
     r"(?i)(error|err|fail(?:ed|ure)?|fault|panic|assert|timeout|reset|exception|abort)"
@@ -36,12 +36,27 @@ SOURCE_EXTENSIONS = {
     ".yml",
     ".json",
 }
-SKIP_DIRS = {".git", ".hg", ".svn", ".venv", "venv", "node_modules", "build", "dist", "__pycache__"}
+SKIP_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "node_modules",
+    "build",
+    "dist",
+    "__pycache__",
+}
 
 
 def normalize_paths(paths: list[str], *, base: Path | None = None) -> list[str]:
     root = base or Path.cwd()
-    return [str((root / path).resolve()) if not Path(path).is_absolute() else str(Path(path)) for path in paths]
+    return [
+        str((root / path).resolve())
+        if not Path(path).is_absolute()
+        else str(Path(path))
+        for path in paths
+    ]
 
 
 def read_text_sample(path: str, *, max_bytes: int = 200_000) -> str:
@@ -97,7 +112,9 @@ def triage_logs(log_paths: list[str], *, max_findings: int = 40) -> list[Observa
     return observations
 
 
-def derive_search_terms(problem_statement: str, observations: list[Observation]) -> list[str]:
+def derive_search_terms(
+    problem_statement: str, observations: list[Observation]
+) -> list[str]:
     terms: Counter[str] = Counter()
     for token in TOKEN_RE.findall(problem_statement):
         if len(token) > 3:
@@ -107,7 +124,12 @@ def derive_search_terms(problem_statement: str, observations: list[Observation])
         if symbol and len(symbol) > 2:
             terms[symbol] += 5
         for token in TOKEN_RE.findall(obs.get("summary", "")):
-            if len(token) > 3 and token.lower() not in {"error", "failed", "failure", "timeout"}:
+            if len(token) > 3 and token.lower() not in {
+                "error",
+                "failed",
+                "failure",
+                "timeout",
+            }:
                 terms[token] += 1
     return [term for term, _ in terms.most_common(20)]
 
@@ -120,7 +142,10 @@ def iter_source_files(source_root: str) -> list[Path]:
             continue
         if any(part in SKIP_DIRS for part in path.parts):
             continue
-        if path.suffix in SOURCE_EXTENSIONS or path.name in {"Makefile", "CMakeLists.txt"}:
+        if path.suffix in SOURCE_EXTENSIONS or path.name in {
+            "Makefile",
+            "CMakeLists.txt",
+        }:
             files.append(path)
     return files
 
