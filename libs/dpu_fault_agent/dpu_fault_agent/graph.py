@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -7,6 +8,14 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from dpu_fault_agent.llm_tools import (
+    execute_pending_action,
+    execute_tool_calls,
+    parse_tool_plan,
+    registered_tools,
+    reject_pending_action,
+)
+from dpu_fault_agent.model import ChatModelFactory, ModelConfig
 from dpu_fault_agent.report import render_report
 from dpu_fault_agent.script_runner import run_skill_scripts
 from dpu_fault_agent.skills import default_skill_dirs, load_skills, match_skills
@@ -29,6 +38,9 @@ def build_graph(*, checkpointer: Any | None = None):
     builder.add_node("evidence_collector", evidence_collector)
     builder.add_node("skill_router", skill_router)
     builder.add_node("skill_script_runner", skill_script_runner)
+    builder.add_node("llm_tool_planner", llm_tool_planner)
+    builder.add_node("tool_executor", tool_executor)
+    builder.add_node("tool_reflector", tool_reflector)
     builder.add_node("diagnosis_planner", diagnosis_planner)
     builder.add_node("human_gate", human_gate)
     builder.add_node("hypothesis_builder", hypothesis_builder)
@@ -40,7 +52,10 @@ def build_graph(*, checkpointer: Any | None = None):
     builder.add_edge("skill_loader", "evidence_collector")
     builder.add_edge("evidence_collector", "skill_router")
     builder.add_edge("skill_router", "skill_script_runner")
-    builder.add_edge("skill_script_runner", "diagnosis_planner")
+    builder.add_edge("skill_script_runner", "llm_tool_planner")
+    builder.add_edge("llm_tool_planner", "tool_executor")
+    builder.add_edge("tool_executor", "tool_reflector")
+    builder.add_edge("tool_reflector", "diagnosis_planner")
     builder.add_edge("diagnosis_planner", "human_gate")
     builder.add_edge("human_gate", "hypothesis_builder")
     builder.add_edge("hypothesis_builder", "validation_planner")
@@ -57,6 +72,7 @@ def make_initial_state(
     source_root: str | None = None,
     skill_dirs: list[str] | None = None,
     case_id: str | None = None,
+    llm_config: dict[str, Any] | None = None,
 ) -> DpuFaultState:
     return {
         "messages": [HumanMessage(content=problem)],
@@ -75,8 +91,11 @@ def make_initial_state(
         "diagnosis_plan": {},
         "observations": [],
         "hypotheses": [],
+        "tool_calls": [],
+        "pending_action": {},
+        "llm_analysis": {},
         "approval": {"status": "not_reviewed", "approved_ids": [], "rejected_ids": []},
-        "metadata": {},
+        "metadata": {"llm_config": llm_config or ModelConfig().to_dict()},
     }
 
 
@@ -190,10 +209,97 @@ def skill_script_runner(state: DpuFaultState) -> dict[str, Any]:
     }
 
 
+def llm_tool_planner(state: DpuFaultState) -> dict[str, Any]:
+    config = _model_config(state)
+    if not config.enabled:
+        return {"messages": [AIMessage(content="LLM tool planning is disabled.")]}
+    if state.get("tool_calls"):
+        return {
+            "messages": [
+                AIMessage(
+                    content="LLM tool planning skipped; tool calls already exist."
+                )
+            ]
+        }
+    try:
+        prompt = _tool_planning_prompt(state)
+        raw = ChatModelFactory(config).create().complete(prompt)
+        plan = parse_tool_plan(raw)
+    except Exception as exc:
+        observations = state.get("observations", []) + [
+            {
+                "kind": "llm_error",
+                "summary": f"LLM tool planning failed: {exc}",
+                "severity": "error",
+                "evidence": str(exc),
+            }
+        ]
+        return {
+            "observations": observations,
+            "llm_analysis": {
+                **state.get("llm_analysis", {}),
+                "errors": state.get("llm_analysis", {}).get("errors", [])
+                + [f"tool_planner: {exc}"],
+            },
+            "messages": [
+                AIMessage(content="LLM tool planning failed; falling back to rules.")
+            ],
+        }
+    return {
+        "tool_calls": plan["tool_calls"],
+        "llm_analysis": {
+            **state.get("llm_analysis", {}),
+            "tool_choice_reason": plan.get("reasoning_summary", ""),
+        },
+        "messages": [
+            AIMessage(content=f"LLM proposed {len(plan['tool_calls'])} tool call(s).")
+        ],
+    }
+
+
+def tool_executor(state: DpuFaultState) -> dict[str, Any]:
+    config = _model_config(state)
+    tool_calls = state.get("tool_calls", [])
+    if not tool_calls:
+        return {"messages": [AIMessage(content="No LLM tool calls to execute.")]}
+    result = execute_tool_calls(
+        state, tool_calls, max_steps=max(0, config.max_tool_steps)
+    )
+    updates: dict[str, Any] = {
+        "tool_calls": result["tool_calls"],
+        "observations": result["observations"],
+        "messages": [
+            AIMessage(
+                content=f"Executed {result['executed_count']} low-risk LLM tool call(s)."
+            )
+        ],
+    }
+    if result["pending_action"]:
+        updates["pending_action"] = result["pending_action"]
+    return updates
+
+
+def tool_reflector(state: DpuFaultState) -> dict[str, Any]:
+    calls = state.get("tool_calls", [])
+    completed = len([call for call in calls if call.get("status") == "completed"])
+    pending = len([call for call in calls if call.get("status") == "pending_approval"])
+    skipped = len([call for call in calls if call.get("status") == "skipped_budget"])
+    reflection = (
+        f"Tool execution summary: completed={completed}, "
+        f"pending_approval={pending}, skipped_budget={skipped}."
+    )
+    return {
+        "llm_analysis": {**state.get("llm_analysis", {}), "reflection": reflection},
+        "messages": [AIMessage(content=reflection)],
+    }
+
+
 def diagnosis_planner(state: DpuFaultState) -> dict[str, Any]:
     plan = _build_diagnosis_plan(state)
     status = "pending"
-    if plan.get("evidence_gaps"):
+    if state.get("pending_action"):
+        status = "pending_tool_approval"
+    elif plan.get("evidence_gaps"):
         status = "needs_more_evidence"
     return {
         "diagnosis_plan": plan,
@@ -273,6 +379,41 @@ def human_gate(state: DpuFaultState) -> dict[str, Any]:
     approval = state.get("approval", {})
     if approval.get("status") in {"approved", "rejected"}:
         return {}
+    pending_action = state.get("pending_action", {})
+    if pending_action:
+        decision = interrupt(
+            {
+                "stage": "human_gate",
+                "message": "Review and approve or reject the pending tool action.",
+                "pending_action": pending_action,
+                "diagnosis_plan": state.get("diagnosis_plan", {}),
+                "matched_skills": state.get("matched_skills", []),
+            }
+        )
+        note = _decision_note(decision)
+        if _decision_rejected(decision):
+            updates = reject_pending_action(state, pending_action, note)
+            return {
+                **updates,
+                "approval": {
+                    "status": "approved",
+                    "approved_ids": [],
+                    "rejected_ids": [],
+                    "note": note or "Pending tool action rejected by reviewer.",
+                },
+                "messages": [AIMessage(content="Pending tool action was rejected.")],
+            }
+        updates = execute_pending_action(state, pending_action)
+        return {
+            **updates,
+            "approval": {
+                "status": "approved",
+                "approved_ids": [],
+                "rejected_ids": [],
+                "note": note or "Pending tool action approved and executed.",
+            },
+            "messages": [AIMessage(content="Pending tool action was executed.")],
+        }
     decision = interrupt(
         {
             "stage": "human_gate",
@@ -479,6 +620,54 @@ def _skills_from_metadata(state: DpuFaultState):
     for item in state.get("metadata", {}).get("skills", []):
         skills.append(Skill.from_dict(item))
     return skills
+
+
+def _model_config(state: DpuFaultState) -> ModelConfig:
+    return ModelConfig.from_dict(state.get("metadata", {}).get("llm_config", {}))
+
+
+def _tool_planning_prompt(state: DpuFaultState) -> str:
+    payload = {
+        "task": "Choose low-risk diagnostic tool calls for DPU fault localization. Return JSON only.",
+        "output_schema": {
+            "reasoning_summary": "short reason for tool choices",
+            "tool_calls": [
+                {
+                    "id": "T1",
+                    "tool": "log_triage|source_search|read_file|skill_script|shell",
+                    "args": {},
+                    "reason": "short expected benefit",
+                }
+            ],
+        },
+        "limits": {
+            "max_tool_calls": _model_config(state).max_tool_steps,
+            "avoid": "Do not propose source modifications unless necessary; risky shell commands require approval.",
+        },
+        "problem": state.get("problem_statement", ""),
+        "artifacts": state.get("artifacts", {}),
+        "problem_analysis": state.get("problem_analysis", {}),
+        "matched_skills": state.get("matched_skills", []),
+        "observations": state.get("observations", [])[:20],
+        "available_tools": registered_tools(state.get("matched_skills", [])),
+    }
+    return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+def _decision_rejected(decision: Any) -> bool:
+    if isinstance(decision, str):
+        return decision.strip().lower() in {"reject", "rejected", "none"}
+    if isinstance(decision, dict):
+        return str(decision.get("status", "")).lower() == "rejected"
+    return False
+
+
+def _decision_note(decision: Any) -> str:
+    if isinstance(decision, dict):
+        return str(decision.get("note", ""))
+    if isinstance(decision, str):
+        return decision
+    return ""
 
 
 def _extract_supplement(decision: Any) -> dict[str, Any]:

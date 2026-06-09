@@ -67,6 +67,23 @@ def render_report(state: DpuFaultState) -> str:
     else:
         lines.append("- No feature-specific skill matched; generic triage was used.")
 
+    lines.extend(["", "## LLM Tool Activity", ""])
+    llm_analysis = state.get("llm_analysis", {})
+    if llm_analysis.get("tool_choice_reason"):
+        lines.append(f"- Tool choice: {llm_analysis.get('tool_choice_reason')}")
+    if llm_analysis.get("reflection"):
+        lines.append(f"- Reflection: {llm_analysis.get('reflection')}")
+    tool_calls = state.get("tool_calls", [])
+    if tool_calls:
+        for call in tool_calls[:10]:
+            lines.append(
+                f"- `{call.get('id')}` {call.get('tool')} "
+                f"status={call.get('status')} risk={call.get('risk_level', 'unknown')}: "
+                f"{call.get('result_summary', call.get('reason', ''))}"
+            )
+    else:
+        lines.append("- No LLM tool calls were executed.")
+
     lines.extend(["", "## Diagnosis Plan", ""])
     plan = state.get("diagnosis_plan", {})
     lines.append(plan.get("summary", "No diagnosis plan was generated."))

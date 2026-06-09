@@ -15,6 +15,31 @@ dpu-fault-agent report --thread-id case-1 --output report.md
 
 The agent accepts a problem statement first. Logs, source roots, and skill directories are optional and can be supplied at run time or later through `resume`.
 
+## LLM Tool Execution
+
+LLM planning is disabled by default. Enable it with a YAML config file or CLI overrides:
+
+```yaml
+llm:
+  enabled: true
+  provider: openai-compatible
+  model: gpt-4.1-mini
+  base_url: https://api.openai.com/v1
+  api_key_env: OPENAI_API_KEY
+  temperature: 0.0
+  timeout_seconds: 30
+  max_tokens: 2000
+  max_tool_steps: 5
+```
+
+```bash
+dpu-fault-agent --config dpu_fault_agent.yaml run --thread-id case-1 --problem "vf init timeout"
+```
+
+When enabled, the LLM may choose registered diagnostic tools: log triage, source search, file snippet reads, matched skill scripts, and controlled shell commands. Read-only shell commands can run automatically. Risky commands are paused at `human_gate` and require `resume --approve ...` or `resume --reject`.
+
+Risky commands include source/config writes, deletes or moves, dependency installation, network access, device access, flashing, and long-running shell commands. Each tool call is checkpointed and rendered in the final report.
+
 ## OpenCode
 
 This repository includes a project-level OpenCode primary agent at `.opencode/agents/dpu_fault_agent.md`. OpenCode loads primary agents from `.opencode/agents/`, so the agent is available in the TUI agent cycle and can be selected with Tab.

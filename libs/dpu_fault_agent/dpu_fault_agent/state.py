@@ -73,6 +73,40 @@ class DiagnosisPlan(TypedDict, total=False):
     required_evidence: list[str]
     next_actions: list[str]
     evidence_gaps: list[str]
+    reasoning_summary: str
+
+
+class ToolCall(TypedDict, total=False):
+    id: str
+    tool: str
+    args: dict[str, Any]
+    reason: str
+    risk_level: str
+    requires_approval: bool
+    status: str
+    result_summary: str
+    exit_code: int
+    stdout: str
+    stderr: str
+
+
+class PendingAction(TypedDict, total=False):
+    tool_call_id: str
+    tool: str
+    args: dict[str, Any]
+    command: str
+    cwd: str
+    risk_level: str
+    risk_reason: str
+    expected_benefit: str
+    possible_impact: str
+
+
+class LlmAnalysis(TypedDict, total=False):
+    reasoning_summary: str
+    tool_choice_reason: str
+    reflection: str
+    errors: list[str]
 
 
 class DpuFaultState(TypedDict):
@@ -86,6 +120,9 @@ class DpuFaultState(TypedDict):
     diagnosis_plan: NotRequired[DiagnosisPlan]
     observations: NotRequired[list[Observation]]
     hypotheses: NotRequired[list[Hypothesis]]
+    tool_calls: NotRequired[list[ToolCall]]
+    pending_action: NotRequired[PendingAction]
+    llm_analysis: NotRequired[LlmAnalysis]
     approval: NotRequired[Approval]
     final_report: NotRequired[str]
     metadata: NotRequired[dict[str, Any]]

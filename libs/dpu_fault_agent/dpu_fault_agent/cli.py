@@ -10,6 +10,7 @@ from langgraph.types import Command
 
 from dpu_fault_agent.checkpoint import DEFAULT_CHECKPOINT_PATH, sqlite_checkpointer
 from dpu_fault_agent.graph import build_graph, make_initial_state
+from dpu_fault_agent.model import load_model_config
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -29,6 +30,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_CHECKPOINT_PATH,
         help="SQLite checkpoint database path.",
     )
+    parser.add_argument("--config", help="YAML config file with `llm` settings.")
+    parser.add_argument("--llm-model")
+    parser.add_argument("--llm-base-url")
+    parser.add_argument("--llm-api-key-env")
+    parser.add_argument("--llm-temperature", type=float)
+    parser.add_argument("--llm-max-tool-steps", type=int)
+    parser.add_argument("--no-llm", action="store_true")
     subparsers = parser.add_subparsers(required=True)
 
     run = subparsers.add_parser("run", help="Start a fault-localization run.")
@@ -70,6 +78,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         log_paths=args.logs,
         source_root=args.source,
         skill_dirs=args.skills,
+        llm_config=_model_config_from_args(args),
     )
     with sqlite_checkpointer(args.checkpoint_db) as saver:
         graph = build_graph(checkpointer=saver)
@@ -163,7 +172,11 @@ def _print_snapshot(values: dict[str, Any], next_nodes: tuple[str, ...]) -> None
     print(f"observations: {len(values.get('observations', []))}")
     print(f"hypotheses: {len(values.get('hypotheses', []))}")
     print(f"matched_skills: {len(values.get('matched_skills', []))}")
+    print(f"tool_calls: {len(values.get('tool_calls', []))}")
     print(f"approval: {values.get('approval', {}).get('status', 'unknown')}")
+    if values.get("pending_action"):
+        action = values["pending_action"]
+        print(f"pending_action: {action.get('tool')} {action.get('command', '')}")
     plan = values.get("diagnosis_plan", {})
     if plan:
         print(f"diagnosis_plan: {plan.get('summary', '')}")
@@ -179,6 +192,10 @@ def _summarize_update(update: dict[str, Any]) -> str:
         parts.append(f"hypotheses={len(update['hypotheses'])}")
     if "matched_skills" in update:
         parts.append(f"matched_skills={len(update['matched_skills'])}")
+    if "tool_calls" in update:
+        parts.append(f"tool_calls={len(update['tool_calls'])}")
+    if "pending_action" in update and update["pending_action"]:
+        parts.append("pending_action=available")
     if "diagnosis_plan" in update:
         parts.append("diagnosis_plan=available")
     if "approval" in update:
@@ -193,3 +210,28 @@ def _summarize_update(update: dict[str, Any]) -> str:
 
 def _config(thread_id: str) -> dict[str, Any]:
     return {"configurable": {"thread_id": thread_id}}
+
+
+def _model_config_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    overrides: dict[str, Any] = {
+        "model": args.llm_model,
+        "base_url": args.llm_base_url,
+        "api_key_env": args.llm_api_key_env,
+        "temperature": args.llm_temperature,
+        "max_tool_steps": args.llm_max_tool_steps,
+    }
+    if args.no_llm:
+        overrides["enabled"] = False
+    elif any(
+        value is not None
+        for value in (
+            args.llm_model,
+            args.llm_base_url,
+            args.llm_api_key_env,
+            args.llm_temperature,
+            args.llm_max_tool_steps,
+        )
+    ):
+        overrides["enabled"] = True
+    config = load_model_config(args.config, overrides)
+    return config.to_dict()

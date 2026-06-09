@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from dpu_fault_agent.cli import main
@@ -126,3 +127,37 @@ def test_cli_problem_only_then_resume_with_materials(tmp_path: Path, capsys) -> 
         == 0
     )
     assert "final_report: available" in capsys.readouterr().out
+
+
+def test_cli_llm_config_enables_mock_planning(tmp_path: Path, capsys) -> None:
+    db = tmp_path / "checkpoints.sqlite"
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        "llm:\n"
+        "  enabled: true\n"
+        "  provider: mock\n"
+        "  model: mock\n"
+        f"  mock_response: '{json.dumps({'reasoning_summary': 'noop', 'tool_calls': []})}'\n",
+        encoding="utf-8",
+    )
+
+    assert (
+        main(
+            [
+                "--checkpoint-db",
+                str(db),
+                "--config",
+                str(config),
+                "run",
+                "--thread-id",
+                "llm-cli",
+                "--problem",
+                "VF init timeout",
+            ]
+        )
+        == 0
+    )
+
+    out = capsys.readouterr().out
+    assert "LLM proposed 0 tool call" in out
+    assert "tool_calls: 0" in out
