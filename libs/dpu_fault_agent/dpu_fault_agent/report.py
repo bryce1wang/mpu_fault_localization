@@ -46,6 +46,34 @@ def render_report(state: DpuFaultState) -> str:
     else:
         lines.append("- No strong log or source-code observations were found.")
 
+    lines.extend(["", "## Problem Analysis", ""])
+    analysis = state.get("problem_analysis", {})
+    lines.append(f"- Keywords: {', '.join(analysis.get('keywords', [])) or 'N/A'}")
+    lines.append(f"- Symptoms: {', '.join(analysis.get('symptoms', [])) or 'N/A'}")
+    lines.append(
+        f"- Missing information: {', '.join(analysis.get('missing_info', [])) or 'N/A'}"
+    )
+
+    lines.extend(["", "## Matched Skills", ""])
+    matches = state.get("matched_skills", [])
+    if matches:
+        for match in matches:
+            reasons = ", ".join(match.get("reasons", []))
+            lines.append(
+                f"- `{match.get('id')}` {match.get('name')} "
+                f"(score={match.get('score')}, reasons={reasons})"
+            )
+    else:
+        lines.append("- No feature-specific skill matched; generic triage was used.")
+
+    lines.extend(["", "## Diagnosis Plan", ""])
+    plan = state.get("diagnosis_plan", {})
+    lines.append(plan.get("summary", "No diagnosis plan was generated."))
+    for step in plan.get("steps", []):
+        lines.append(f"- Step: {step}")
+    for gap in plan.get("evidence_gaps", []):
+        lines.append(f"- Evidence gap: {gap}")
+
     lines.extend(["", "## Primary Hypotheses", ""])
     if primary:
         for hypothesis in primary:
@@ -65,6 +93,9 @@ def render_report(state: DpuFaultState) -> str:
 
     lines.extend(["", "## Validation Plan", ""])
     validation_steps = _collect_validation_steps(primary or hypotheses)
+    for step in plan.get("next_actions", []):
+        if step not in validation_steps:
+            validation_steps.append(step)
     if validation_steps:
         for step in validation_steps:
             lines.append(f"- {step}")

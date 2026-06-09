@@ -35,8 +35,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--thread-id", required=True)
     run.add_argument("--case-id")
     run.add_argument("--problem", required=True)
-    run.add_argument("--log", action="append", required=True, dest="logs")
-    run.add_argument("--source", required=True)
+    run.add_argument("--log", action="append", default=[], dest="logs")
+    run.add_argument("--source")
+    run.add_argument("--skills", action="append", default=[], dest="skills")
     run.set_defaults(func=cmd_run)
 
     status = subparsers.add_parser("status", help="Show checkpointed run status.")
@@ -45,9 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     resume = subparsers.add_parser("resume", help="Resume from the human gate.")
     resume.add_argument("--thread-id", required=True)
-    group = resume.add_mutually_exclusive_group(required=True)
+    group = resume.add_mutually_exclusive_group()
     group.add_argument("--approve", help="Comma-separated hypothesis IDs to approve.")
     group.add_argument("--reject", action="store_true", help="Reject all hypotheses.")
+    resume.add_argument("--log", action="append", default=[], dest="logs")
+    resume.add_argument("--source")
     resume.add_argument("--note", default="")
     resume.set_defaults(func=cmd_resume)
 
@@ -66,6 +69,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         problem=args.problem,
         log_paths=args.logs,
         source_root=args.source,
+        skill_dirs=args.skills,
     )
     with sqlite_checkpointer(args.checkpoint_db) as saver:
         graph = build_graph(checkpointer=saver)
@@ -86,11 +90,25 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_resume(args: argparse.Namespace) -> int:
     config = _config(args.thread_id)
+    if not any([args.approve, args.reject, args.logs, args.source, args.note]):
+        print(
+            "error: resume requires --approve, --reject, --log, --source, or --note",
+            file=sys.stderr,
+        )
+        return 1
     if args.reject:
         decision: dict[str, Any] = {"status": "rejected", "note": args.note}
     else:
-        approved = [item.strip() for item in args.approve.split(",") if item.strip()]
-        decision = {"status": "approved", "approved_ids": approved, "note": args.note}
+        decision = {"note": args.note}
+        if args.approve:
+            approved = [
+                item.strip() for item in args.approve.split(",") if item.strip()
+            ]
+            decision.update({"status": "approved", "approved_ids": approved})
+    if args.logs:
+        decision["log_paths"] = args.logs
+    if args.source:
+        decision["source_root"] = args.source
     with sqlite_checkpointer(args.checkpoint_db) as saver:
         graph = build_graph(checkpointer=saver)
         _stream_updates(graph, Command(resume=decision), config)
@@ -144,7 +162,11 @@ def _print_snapshot(values: dict[str, Any], next_nodes: tuple[str, ...]) -> None
     print(f"next: {', '.join(next_nodes) if next_nodes else 'END'}")
     print(f"observations: {len(values.get('observations', []))}")
     print(f"hypotheses: {len(values.get('hypotheses', []))}")
+    print(f"matched_skills: {len(values.get('matched_skills', []))}")
     print(f"approval: {values.get('approval', {}).get('status', 'unknown')}")
+    plan = values.get("diagnosis_plan", {})
+    if plan:
+        print(f"diagnosis_plan: {plan.get('summary', '')}")
     if values.get("final_report"):
         print("final_report: available")
 
@@ -155,6 +177,10 @@ def _summarize_update(update: dict[str, Any]) -> str:
         parts.append(f"observations={len(update['observations'])}")
     if "hypotheses" in update:
         parts.append(f"hypotheses={len(update['hypotheses'])}")
+    if "matched_skills" in update:
+        parts.append(f"matched_skills={len(update['matched_skills'])}")
+    if "diagnosis_plan" in update:
+        parts.append("diagnosis_plan=available")
     if "approval" in update:
         parts.append(f"approval={update['approval'].get('status')}")
     if "final_report" in update:
