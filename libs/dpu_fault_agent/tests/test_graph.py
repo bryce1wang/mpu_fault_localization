@@ -23,6 +23,42 @@ def _case(tmp_path: Path) -> tuple[Path, Path]:
     return log, source
 
 
+def _script_skill(root: Path) -> Path:
+    skill_dir = root / "virtualization" / "vf" / "vf-init-timeout"
+    scripts_dir = skill_dir / "scripts"
+    scripts_dir.mkdir(parents=True)
+    (scripts_dir / "collect.py").write_text(
+        "import os\n"
+        "print('script evidence for ' + os.environ['DPU_FAULT_AGENT_PROBLEM'])\n",
+        encoding="utf-8",
+    )
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: vf-init-timeout
+description: Diagnose VF init timeout and DPU_ERR_TIMEOUT during VF bring-up.
+feature: virtualization
+module: vf
+problem_type: init-timeout
+modules: [vf, dpu]
+keywords: [vf, init, DPU_ERR_TIMEOUT]
+symptoms: [timeout, failed]
+required_evidence: [failing log window]
+triage_steps: [Run skill collector, Check VF init stage]
+common_causes: [queue setup timeout]
+validation_steps: [Compare known-good VF init log]
+scripts:
+  - name: collect
+    path: scripts/collect.py
+    timeout_seconds: 5
+---
+
+VF initialization troubleshooting notes.
+""",
+        encoding="utf-8",
+    )
+    return root
+
+
 def test_graph_interrupts_at_human_gate(tmp_path: Path) -> None:
     log, source = _case(tmp_path)
     graph = build_graph(checkpointer=InMemorySaver())
@@ -97,6 +133,7 @@ def test_problem_only_run_generates_plan_and_requests_evidence() -> None:
     snapshot = graph.get_state(config)
     assert snapshot.values["diagnosis_plan"]["evidence_gaps"]
     assert snapshot.values["approval"]["status"] == "needs_more_evidence"
+    assert snapshot.values["matched_skills"][0]["id"] == "generic-dpu"
 
 
 def test_resume_with_supplemental_material_updates_plan(tmp_path: Path) -> None:
@@ -124,3 +161,26 @@ def test_resume_with_supplemental_material_updates_plan(tmp_path: Path) -> None:
     assert result["observations"]
     assert result["artifacts"]["notes"] == ["failure happens after queue setup"]
     assert "DPU_ERR_TIMEOUT" in result["final_report"]
+
+
+def test_matched_skill_scripts_add_observations(tmp_path: Path) -> None:
+    skill_root = _script_skill(tmp_path / "skills")
+    graph = build_graph(checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": "case-6"}}
+    initial = make_initial_state(
+        thread_id="case-6",
+        problem="VF init timeout after DPU reset",
+        skill_dirs=[str(skill_root)],
+    )
+
+    events = list(graph.stream(initial, config, stream_mode="updates"))
+
+    assert "__interrupt__" in events[-1]
+    snapshot = graph.get_state(config)
+    script_observations = [
+        obs
+        for obs in snapshot.values["observations"]
+        if obs.get("kind") == "skill_script"
+    ]
+    assert script_observations
+    assert "script evidence for VF init timeout" in script_observations[0]["evidence"]

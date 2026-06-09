@@ -1,6 +1,9 @@
 ---
-id: generic_dpu
-name: Generic DPU issue triage
+name: generic-dpu
+description: Diagnose generic DPU driver, firmware, initialization, reset, timeout, error, panic, or packet drop issues when no feature-specific skill matches.
+feature: generic
+module: dpu
+problem_type: generic-triage
 modules:
   - dpu
   - driver

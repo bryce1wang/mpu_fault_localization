@@ -52,6 +52,10 @@ class ProblemAnalysis(TypedDict, total=False):
 class MatchedSkill(TypedDict, total=False):
     id: str
     name: str
+    description: str
+    feature: str
+    module: str
+    problem_type: str
     score: int
     reasons: list[str]
     modules: list[str]
@@ -60,6 +64,7 @@ class MatchedSkill(TypedDict, total=False):
     common_causes: list[str]
     validation_steps: list[str]
     body: str
+    scripts: list[dict[str, Any]]
 
 
 class DiagnosisPlan(TypedDict, total=False):

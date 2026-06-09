@@ -61,6 +61,7 @@ def render_report(state: DpuFaultState) -> str:
             reasons = ", ".join(match.get("reasons", []))
             lines.append(
                 f"- `{match.get('id')}` {match.get('name')} "
+                f"[{match.get('feature')}/{match.get('module')}/{match.get('problem_type')}] "
                 f"(score={match.get('score')}, reasons={reasons})"
             )
     else:

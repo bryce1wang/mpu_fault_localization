@@ -8,6 +8,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
 from dpu_fault_agent.report import render_report
+from dpu_fault_agent.script_runner import run_skill_scripts
 from dpu_fault_agent.skills import default_skill_dirs, load_skills, match_skills
 from dpu_fault_agent.state import Approval, DiagnosisPlan, DpuFaultState, Hypothesis
 from dpu_fault_agent.tools import (
@@ -27,6 +28,7 @@ def build_graph(*, checkpointer: Any | None = None):
     builder.add_node("skill_loader", skill_loader)
     builder.add_node("evidence_collector", evidence_collector)
     builder.add_node("skill_router", skill_router)
+    builder.add_node("skill_script_runner", skill_script_runner)
     builder.add_node("diagnosis_planner", diagnosis_planner)
     builder.add_node("human_gate", human_gate)
     builder.add_node("hypothesis_builder", hypothesis_builder)
@@ -37,7 +39,8 @@ def build_graph(*, checkpointer: Any | None = None):
     builder.add_edge("problem_analyzer", "skill_loader")
     builder.add_edge("skill_loader", "evidence_collector")
     builder.add_edge("evidence_collector", "skill_router")
-    builder.add_edge("skill_router", "diagnosis_planner")
+    builder.add_edge("skill_router", "skill_script_runner")
+    builder.add_edge("skill_script_runner", "diagnosis_planner")
     builder.add_edge("diagnosis_planner", "human_gate")
     builder.add_edge("human_gate", "hypothesis_builder")
     builder.add_edge("hypothesis_builder", "validation_planner")
@@ -133,7 +136,7 @@ def skill_loader(state: DpuFaultState) -> dict[str, Any]:
     return {
         "metadata": {
             **state.get("metadata", {}),
-            "skills": [skill.__dict__ for skill in skills],
+            "skills": [skill.to_dict() for skill in skills],
         },
         "messages": [AIMessage(content=f"Loaded {len(skills)} diagnostic skill(s).")],
     }
@@ -158,13 +161,31 @@ def skill_router(state: DpuFaultState) -> dict[str, Any]:
         skills, keywords=keywords, observations=state.get("observations", [])
     )
     if not matches:
-        generic = [skill for skill in skills if skill.id == "generic_dpu"]
+        generic = [skill for skill in skills if skill.id == "generic-dpu"]
         if generic:
             matches = [generic[0].to_match(score=1, reasons=["fallback:generic"])]
     return {
         "matched_skills": matches[:3],
         "messages": [
             AIMessage(content=f"Matched {len(matches[:3])} diagnostic skill(s).")
+        ],
+    }
+
+
+def skill_script_runner(state: DpuFaultState) -> dict[str, Any]:
+    matched_skills = state.get("matched_skills", [])
+    script_observations = run_skill_scripts(state, matched_skills)
+    if not script_observations:
+        return {
+            "messages": [AIMessage(content="No skill scripts were declared to run.")]
+        }
+    observations = state.get("observations", []) + script_observations
+    return {
+        "observations": observations,
+        "messages": [
+            AIMessage(
+                content=f"Skill scripts produced {len(script_observations)} observation(s)."
+            )
         ],
     }
 
@@ -275,10 +296,18 @@ def human_gate(state: DpuFaultState) -> dict[str, Any]:
             observations=observations,
         )
         if not matches:
-            generic = [skill for skill in skills if skill.id == "generic_dpu"]
+            generic = [skill for skill in skills if skill.id == "generic-dpu"]
             if generic:
                 matches = [generic[0].to_match(score=1, reasons=["fallback:generic"])]
-        updated_state = {**updated_state, "matched_skills": matches[:3]}
+        script_observations = run_skill_scripts(
+            {**updated_state, "matched_skills": matches[:3]}, matches[:3]
+        )
+        observations = observations + script_observations
+        updated_state = {
+            **updated_state,
+            "observations": observations,
+            "matched_skills": matches[:3],
+        }
         updates["artifacts"] = artifacts
         updates["observations"] = observations
         updates["matched_skills"] = matches[:3]
@@ -448,7 +477,7 @@ def _skills_from_metadata(state: DpuFaultState):
 
     skills = []
     for item in state.get("metadata", {}).get("skills", []):
-        skills.append(Skill(**item))
+        skills.append(Skill.from_dict(item))
     return skills
 
 
